@@ -1,0 +1,63 @@
+name: test workflow
+on:
+    - push
+env:
+    IMG_NAME: ${{vars.DOCKERHUB_NAME}}/${{vars.DOCKERHUB_IMG_PREFIX}}-admin-api
+
+jobs:
+    build-image:
+        runs-on: ubuntu-latest
+        steps:
+            - 
+                uses: actions/checkout@v4
+            - 
+                uses: benjlevesque/short-sha@v3.0
+                id: short-sha
+            -
+                name: setup QEMU
+                uses: docker/setup-qemu-action@v3
+            -
+                name: setup docker buildx
+                uses: docker/setup-buildx-action@v3
+            -
+                name: login to docker hub
+                uses: docker/login-action@v3
+                with:
+                    username: ${{vars.DOCKERHUB_NAME}}
+                    password: ${{secrets.DOCKERHUB_PASS}}
+
+            # run the container in the action
+            - 
+                name: Run Docker container
+                run: |
+                    docker run -d -p 5000:5000  -e CI=true ${{env.IMG_NAME}}
+                    sleep 30
+                    docker network create web || true
+                    docker run -d \
+                        --network=web \
+                        -p 8000:80 \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        traefik:v2.5 \
+                        --api.insecure=true \
+                        --providers.docker=true \
+                        --providers.docker.exposedbydefault=false
+
+            -
+                name: ZAP Scan
+                uses: zaproxy/action-full-scan@v0.12.0
+                with:
+                    target: "http://localhost:8000/"
+                    allow_issue_writing: false
+                    fail_action: true
+
+            -
+                name: build and push
+                uses: docker/build-push-action@v6
+                env:
+                    IMG_NAME: ${{env.IMG_NAME}}
+                with:
+                    push: true
+                    platforms: linux/amd64, linux/arm64
+                    tags: ${{env.IMG_NAME}}:${{steps.short-sha.outputs.sha}}, ${{env.IMG_NAME}}:latest
+
+
